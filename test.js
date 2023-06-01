@@ -1,4 +1,5 @@
-class encn_Cambridge {
+/* global api */
+class enen_Vocabulary {
     constructor(options) {
         this.options = options;
         this.maxexample = 2;
@@ -6,10 +7,7 @@ class encn_Cambridge {
     }
 
     async displayName() {
-        let locale = await api.locale();
-        if (locale.indexOf('CN') != -1) return ;
-        if (locale.indexOf('TW') != -1) return ;
-        return 'Cambridge EN->CN Dictionary (SC)';
+        return 'Vocabulary EN->EN Dictionary';
     }
 
     setOptions(options) {
@@ -19,382 +17,93 @@ class encn_Cambridge {
 
     async findTerm(word) {
         this.word = word;
-        let promises = [this.findCambridge(word), this.findOxford(word)];
+        let list = [word];
+        let promises = list.map((item) => this.findCollins(item));
         let results = await Promise.all(promises);
         return [].concat(...results).filter(x => x);
     }
 
-    async findCambridge(word) {
-        let notes = [];
-        if (!word) return notes; // return empty notes
-
-        function T(node) {
-            if (!node)
-                return '';
-            else
-                return node.innerText.trim();
-        }
-
-        let base = 'https://dictionary.cambridge.org/search/english-chinese-simplified/direct/?q=';
-        let url = base + encodeURIComponent(word);
-        let doc = '';
-        try {
-            let data = await api.fetch(url);
-            let parser = new DOMParser();
-            doc = parser.parseFromString(data, 'text/html');
-        } catch (err) {
-            return [];
-        }
-
-        let entries = doc.querySelectorAll('.pr .entry-body__el') || [];
-        for (const entry of entries) {
-            let definitions = [];
-            let audios = [];
-
-            let expression = T(entry.querySelector('.headword'));
-            let reading = '';
-            let readings = entry.querySelectorAll('.pron .ipa');
-            if (readings) {
-                let reading_uk = T(readings[0]);
-                let reading_us = T(readings[1]);
-                reading = (reading_uk || reading_us) ? `UK[${reading_uk}] US[${reading_us}] ` : '';
-            }
-            let pos = T(entry.querySelector('.posgram'));
-            pos = pos ? `<span class='pos'>${pos}</span>` : '';
-            audios[0] = entry.querySelector(".uk.dpron-i source");
-            audios[0] = audios[0] ? 'https://dictionary.cambridge.org' + audios[0].getAttribute('src') : '';
-            //audios[0] = audios[0].replace('https', 'http');
-            audios[1] = entry.querySelector(".us.dpron-i source");
-            audios[1] = audios[1] ? 'https://dictionary.cambridge.org' + audios[1].getAttribute('src') : '';
-            //audios[1] = audios[1].replace('https', 'http');
-
-            let sensbodys = entry.querySelectorAll('.sense-body') || [];
-            for (const sensbody of sensbodys) {
-                let sensblocks = sensbody.childNodes || [];
-                for (const sensblock of sensblocks) {
-                    let phrasehead = '';
-                    let defblocks = [];
-                    if (sensblock.classList && sensblock.classList.contains('phrase-block')) {
-                        phrasehead = T(sensblock.querySelector('.phrase-title'));
-                        phrasehead = phrasehead ? `<div class="phrasehead">${phrasehead}</div>` : '';
-                        defblocks = sensblock.querySelectorAll('.def-block') || [];
-                    }
-                    if (sensblock.classList && sensblock.classList.contains('def-block')) {
-                        defblocks = [sensblock];
-                    }
-                    if (defblocks.length <= 0) continue;
-
-                    // make definition segement
-                    for (const defblock of defblocks) {
-                        let eng_tran = T(defblock.querySelector('.ddef_h .def'));
-                        let chn_tran = T(defblock.querySelector('.def-body .trans'));
-                        if (!eng_tran) continue;
-                        let definition = '';
-                        eng_tran = `<span class='eng_tran'>${eng_tran.replace(RegExp(expression, 'gi'),`<b>${expression}</b>`)}</span>`;
-                        chn_tran = `<span class='chn_tran'>${chn_tran}</span>`;
-                        let tran = `<span class='tran'>${eng_tran}${chn_tran}</span>`;
-                        definition += phrasehead ? `${phrasehead}${tran}` : `${pos}${tran}`;
-
-                        // make exmaple segement
-                        let examps = defblock.querySelectorAll('.def-body .examp') || [];
-                        if (examps.length > 0 && this.maxexample > 0) {
-                            definition += '<ul class="sents">';
-                            for (const [index, examp] of examps.entries()) {
-                                if (index > this.maxexample - 1) break; // to control only 2 example sentence.
-                                let eng_examp = T(examp.querySelector('.eg'));
-                                let chn_examp = T(examp.querySelector('.trans'));
-                                definition += `<li class='sent'><span class='eng_sent'>${eng_examp.replace(RegExp(expression, 'gi'),`<b>${expression}</b>`)}</span><span class='chn_sent'>${chn_examp}</span></li>`;
-                            }
-                            definition += '</ul>';
-                        }
-                        definition && definitions.push(definition);
-                    }
-                }
-            }
-            let css = this.renderCSS();
-            notes.push({
-                css,
-                expression,
-                reading,
-                definitions,
-                audios
-            });
-        }
-        return notes;
-    }
-
-    async findYoudao(word) {
-        if (!word) return [];
-
-        let base = 'https://dict.youdao.com/w/';
-        let url = base + encodeURIComponent(word);
-        let doc = '';
-        try {
-            let data = await api.fetch(url);
-            let parser = new DOMParser();
-            doc = parser.parseFromString(data, 'text/html');
-            let youdao = getYoudao(doc); //Combine Youdao Concise English-Chinese Dictionary to the end.
-            let ydtrans = getYDTrans(doc); //Combine Youdao Translation (if any) to the end.
-            return [].concat(youdao, ydtrans);
-        } catch (err) {
-            return [];
-        }
-
-        function getYoudao(doc) {
-            let notes = [];
-
-            //get Youdao EC data: check data availability
-            let defNodes = doc.querySelectorAll('#phrsListTab .trans-container ul li');
-            if (!defNodes || !defNodes.length) return notes;
-
-            //get headword and phonetic
-            let expression = T(doc.querySelector('#phrsListTab .wordbook-js .keyword')); //headword
-            let reading = '';
-            let readings = doc.querySelectorAll('#phrsListTab .wordbook-js .pronounce');
-            if (readings) {
-                let reading_uk = T(readings[0]);
-                let reading_us = T(readings[1]);
-                reading = (reading_uk || reading_us) ? `${reading_uk} ${reading_us}` : '';
-            }
-
-            let audios = [];
-            audios[0] = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(expression)}&type=1`;
-            audios[1] = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(expression)}&type=2`;
-
-            let definition = '<ul class="ec">';
-            for (const defNode of defNodes){
-                let pos = '';
-                let def = T(defNode);
-                let match = /(^.+?\.)\s/gi.exec(def);
-                if (match && match.length > 1){
-                    pos = match[1];
-                    def = def.replace(pos, '');
-                }
-                pos = pos ? `<span class="pos simple">${pos}</span>`:'';
-                definition += `<li class="ec">${pos}<span class="ec_chn">${def}</span></li>`;
-            }
-            definition += '</ul>';
-            let css = `
-                <style>
-                    span.pos  {text-transform:lowercase; font-size:0.9em; margin-right:5px; padding:2px 4px; color:white; background-color:#0d47a1; border-radius:3px;}
-                    span.simple {background-color: #999!important}
-                    ul.ec, li.ec {margin:0; padding:0;}
-                </style>`;
-            notes.push({
-                css,
-                expression,
-                reading,
-                definitions: [definition],
-                audios
-            });
-            return notes;
-        }
-
-        function getYDTrans(doc) {
-            let notes = [];
-
-            //get Youdao EC data: check data availability
-            let transNode = doc.querySelectorAll('#ydTrans .trans-container p')[1];
-            if (!transNode) return notes;
-
-            let definition = `${T(transNode)}`;
-            let css = `
-                <style>
-                    .odh-expression {
-                        font-size: 1em!important;
-                        font-weight: normal!important;
-                    }
-                </style>`;
-            notes.push({
-                css,
-                definitions: [definition],
-            });
-            return notes;
-        }
-
-        function T(node) {
-            if (!node)
-                return '';
-            else
-                return node.innerText.trim();
-        }
-    }
-
-
-    async findOxford(word) {
-        // helper function
-        function buildDefinitionBlock(exp, pos, defs) {
-            if (!defs || !Array.isArray(defs) || defs.length < 0) return '';
-            let definition = '';
-            let sentence = '';
-            let sentnum = 0;
-            for (const def of defs) {
-                if (def.text) definition += `<span class='tran'><span class='eng_tran'>${def.text}</span></span>`;
-                if (def.tag == 'id' || def.tag == 'pv')
-                    definition += def.enText ? `<div class="idmphrase">${def.enText}</div>` : '';
-                //if (def.tag == 'xrs')
-                //    definition += `<span class='tran'><span class='eng_tran'>${def.data[0].data[0].text}</span></span>`;
-                if (def.tag == 'd' || def.tag == 'ud')
-                    definition += pos + `<span class='tran'><span class='eng_tran'>${def.enText}</span><span class='chn_tran'>${def.chText}</span></span>`;
-                if (def.tag == 'x' && sentnum < maxexample) {
-                    sentnum += 1;
-                    let enText = def.enText.replace(RegExp(exp, 'gi'), `<b>${exp}</b>`);
-                    sentence += `<li class='sent'><span class='eng_sent'>${enText}</span><span class='chn_sent'>${def.chText}</span></li>`;
-                }
-            }
-            definition += sentence ? `<ul class="sents">${sentence}</ul>` : '';
-            return definition;
-        }
+    async findCollins(word) {
         const maxexample = this.maxexample;
         let notes = [];
+
         if (!word) return notes;
-        let base = 'https://fanyi.baidu.com/v2transapi?from=en&to=zh&simple_means_flag=3';
 
-        if (!this.token || !this.gtk) {
-            let common = await this.getToken();
-            if (!common) return [];
-            this.token = common.token;
-            this.gtk = common.gtk;
-        }
-
-        let sign = hash(word, this.gtk);
-        if (!sign) return;
-
-        let dicturl = base + `&query=${word}&sign=${sign}&token=${this.token}`;
-        let data = '';
+        const base = 'https://www.vocabulary.com/dictionary/';
+        const url = base + encodeURIComponent(word);
+        let doc = '';
         try {
-            data = JSON.parse(await api.fetch(dicturl));
-            let oxford = getOxford(data);
-            let bdsimple = oxford.length ? [] : getBDSimple(data); //Combine Youdao Concise English-Chinese Dictionary to the end.
-            let bstrans = oxford.length || bdsimple.length ? [] : getBDTrans(data); //Combine Youdao Translation (if any) to the end.
-            return [].concat(oxford, bdsimple, bstrans);
-
+            let data = await api.fetch(url);
+            let parser = new DOMParser();
+            doc = parser.parseFromString(data, 'text/html');
         } catch (err) {
-            return [];
+            return null;
         }
 
-        function getBDTrans(data) {
-            try {
-                if (data.dict_result && data.dict_result.length != 0) return [];
-                if (!data.trans_result || data.trans_result.data.length < 1) return [];
-                let css = '<style>.odh-expression {font-size: 1em!important;font-weight: normal!important;}</style>';
-                let expression = data.trans_result.data[0].src;
-                let definition = data.trans_result.data[0].dst;
-                return [{ css, expression, definitions: [definition] }];
-            } catch (error) {
-                return [];
+        let ipa = doc.querySelectorAll('.ipa-section > div > span > h3') || '';
+        let reading = 'no ipa';
+        if (ipa.length > 0) {
+            reading = '';
+            for (const i of ipa) {
+                reading += i.innerText;
             }
         }
 
-        function getBDSimple(data) {
-            try {
-                let simple = data.dict_result.simple_means;
-                let expression = simple.word_name;
-                if (!expression) return [];
+        let extrainfo = '';
+        let pos = doc.querySelector('div.pos-icon').innerText || '';
+        pos = pos ? `<span class="pos">${pos}</span>` : '';
 
-                let symbols = simple.symbols[0];
-                let reading_uk = symbols.ph_en || '';
-                let reading_us = symbols.ph_am || '';
-                let reading = reading_uk && reading_us ? `uk[${reading_uk}] us[${reading_us}]` : '';
+        let desc_short = doc.querySelector('p.short') || '';
+        let desc_long = doc.querySelector('p.long') || '';
+        desc_short = desc_short ? `<span class="eng_sent">${desc_short.innerText}</span>` : '';
+        desc_long = desc_long ? `<span class="eng_sent desc_long">${desc_long.innerText}</span>` : '';
+        let definition = `${pos}<span class="tran">${desc_short}<br>${desc_long}</span>`;
 
-                let audios = [];
-                audios[0] = `https://fanyi.baidu.com/gettts?lan=uk&text=${encodeURIComponent(expression)}&spd=3&source=web`;
-                audios[1] = `https://fanyi.baidu.com/gettts?lan=en&text=${encodeURIComponent(expression)}&spd=3&source=web`;
+        let definitions = [definition];
+        const contents = doc.querySelectorAll('div.word-definitions > ol > li') || [];
+        for (const content of contents) {
+            let innerText = content.children[0].innerText;
+            innerText = innerText.trim();
 
-                if (!symbols.parts || symbols.parts.length < 1) return [];
-                let definition = '<ul class="ec">';
-                for (const def of symbols.parts)
-                    if (def.means && def.means.length > 0) {
-                        let pos = def.part || def.part_name || '';
-                        pos = pos ? `<span class="pos simple">${pos}</span>` : '';
-                        definition += `<li class="ec">${pos}<span class="ec_chn">${def.means.join()}</span></li>`;
-                    }
-                definition += '</ul>';
-                let css = `<style>
-                ul.ec, li.ec {margin:0; padding:0;}
-                span.simple {background-color: #999!important}
-                span.pos  {text-transform:lowercase; font-size:0.9em; margin-right:5px; padding:2px 4px; color:white; background-color:#0d47a1; border-radius:3px;}
-                </style>`;
-                notes.push({ css, expression, reading, definitions: [definition], audios });
-                return notes;
-            } catch (error) {
-                return [];
-            }
-        }
+            let words = innerText.split(' ');
+            let pos = words[0];
+            let tran = words.slice(1).join(' ');
 
-        function getOxford(data) {
-            try {
-                let simple = data.dict_result.simple_means;
-                let expression = simple.word_name;
-                if (!expression) return [];
+            pos = pos ? `<span class="pos">${pos}</span>` : '';
+            tran = tran ? `<span class="eng_tran">${tran}</span>` : '';
+            let definition = `${pos}<span class="tran">${tran}</span>`;
 
-                let symbols = simple.symbols[0];
-                let reading_uk = symbols.ph_en || '';
-                let reading_us = symbols.ph_am || '';
-                let reading = reading_uk && reading_us ? `uk[${reading_uk}] us[${reading_us}]` : '';
-
-                let audios = [];
-                audios[0] = `https://fanyi.baidu.com/gettts?lan=uk&text=${encodeURIComponent(expression)}&spd=3&source=web`;
-                audios[1] = `https://fanyi.baidu.com/gettts?lan=en&text=${encodeURIComponent(expression)}&spd=3&source=web`;
-
-                let entries = data.dict_result.oxford.entry[0].data;
-                if (!entries) return [];
-
-                let definitions = [];
-                for (const entry of entries) {
-                    if (entry.tag == 'p-g' || entry.tag == 'h-g') {
-                        let pos = '';
-                        for (const group of entry.data) {
-                            let definition = '';
-                            if (group.tag == 'p') {
-                                pos = `<span class='pos'>${group.p_text}</span>`;
-                            }
-                            if (group.tag == 'd') {
-                                definition += pos + `<span class='tran'><span class='eng_tran'>${group.enText}</span><span class='chn_tran'>${group.chText}</span></span>`;
-                                definitions.push(definition);
-                            }
-
-                            if (group.tag == 'n-g') {
-                                definition += buildDefinitionBlock(expression, pos, group.data);
-                                definitions.push(definition);
-                            }
-
-
-                            //if (group.tag == 'xrs') {
-                            //    definition += buildDefinitionBlock(pos, group.data[0].data);
-                            //    definitions.push(definition);
-                            //}
-
-                            if (group.tag == 'sd-g' || group.tag == 'ids-g' || group.tag == 'pvs-g') {
-                                for (const item of group.data) {
-                                    if (item.tag == 'sd') definition = `<div class="dis"><span class="eng_dis">${item.enText}</span><span class="chn_dis">${item.chText}</span></div>` + definition;
-                                    let defs = [];
-                                    if (item.tag == 'n-g' || item.tag == 'id-g' || item.tag == 'pv-g') defs = item.data;
-                                    if (item.tag == 'vrs' || item.tag == 'xrs') defs = item.data[0].data;
-                                    definition += buildDefinitionBlock(expression, pos, defs);
-                                }
-                                definitions.push(definition);
-                            }
-                        }
-                    }
+            let examples = content.querySelectorAll('.example') || [];
+            if (examples.length > 0) {
+                definition += '<ul class="sents">';
+                for (const ex of examples) {
+                    let eng_sent = ex.innerText;
+                    definition += `<li class='sent'><span class='eng_sent'>${eng_sent}</span></li>`;
                 }
-                let css = encn_Oxford.renderCSS();
-                notes.push({ css, expression, reading, definitions, audios });
-                return notes;
-            } catch (error) {
-                return [];
+                definition += '</ul>';
             }
 
+            definitions.push(definition);
         }
 
-    }
+        let css = this.renderCSS();
+        notes.push({
+            css,
+            expression: word,
+            reading,
+            extrainfo,
+            definitions,
+            audios: []
+        });
 
+        return notes;
+    }
 
     renderCSS() {
         let css = `
             <style>
-                div.phrasehead{margin: 2px 0;font-weight: bold;}
                 span.star {color: #FFBB00;}
+                span.cet  {margin: 0 3px;padding: 0 3px;font-weight: normal;font-size: 0.8em;color: white;background-color: #5cb85c;border-radius: 3px;}
                 span.pos  {text-transform:lowercase; font-size:0.9em; margin-right:5px; padding:2px 4px; color:white; background-color:#0d47a1; border-radius:3px;}
                 span.tran {margin:0; padding:0;}
                 span.eng_tran {margin-right:3px; padding:0;}
@@ -403,7 +112,98 @@ class encn_Cambridge {
                 li.sent  {margin:0; padding:0;}
                 span.eng_sent {margin-right:5px;}
                 span.chn_sent {color:#0d47a1;}
+                span.desc_long {font-size:0.9em; color:#231f1ffc; font-style:italic;}
             </style>`;
         return css;
     }
+}
+
+class encn_Cambridge_Youdao {
+    constructor() {
+        this.options = {};
+    }
+
+    async displayName() {
+        return 'Cambridge EN->CN + Youdao CN->EN';
+    }
+
+    async setOptions(options) {
+        this.options = options;
+    }
+
+    async findTerm(word) {
+        let notes = [];
+
+        let base = 'https://dictionary.cambridge.org/dictionary/english-chinese-traditional/';
+        let url = base + encodeURIComponent(word);
+        let doc = '';
+        try {
+            let data = await api.fetch(url);
+            let parser = new DOMParser();
+            doc = parser.parseFromString(data, 'text/html');
+        } catch (err) {
+            return [];
+        }
+
+        let entries = doc.querySelectorAll('.trans-container > ul > li') || [];
+        for (const entry of entries) {
+            let definitions = [];
+            let expression = T(entry.querySelector('.keyword'));
+            let readings = entry.querySelectorAll('.pronounce');
+            let reading = '';
+            if (readings) {
+                for (const r of readings) {
+                    let type = T(r.querySelector('.phonetic')));
+                    let value = T(r.querySelector('.phonetic'));
+                    if (type && value) {
+                        reading += `${type} [${value}] `;
+                    }
+                }
+            }
+            let pos = T(entry.querySelector('.additional'));
+            pos = pos ? `<span class='pos'>${pos}</span>` : '';
+
+            let defs = entry.querySelectorAll('.trans-container > ul > li > p') || [];
+            for (const def of defs) {
+                let definition = T(def);
+                definitions.push(`<span class='def'>${definition}</span>`);
+            }
+
+            let css = `
+                <style>
+                    .keyword {font-weight: bold; font-size: 18px;}
+                    .pos {font-weight: bold;}
+                    .def {margin-left: 20px;}
+                </style>`;
+
+            notes.push({
+                css,
+                expression,
+                reading,
+                definitions: definitions.length ? definitions : ['No definition available.']
+            });
+        }
+
+        return notes;
+    }
+}
+
+let encn_Cambridge_Youdao_instance = new encn_Cambridge_Youdao();
+let { displayName, setOptions, findTerm } = encn_Cambridge_Youdao_instance;
+displayName().then(name => api.setName(name));
+api.setOptions = setOptions;
+api.search = findTerm;
+
+let enen_Vocabulary_instance = new enen_Vocabulary();
+displayName = enen_Vocabulary_instance.displayName.bind(enen_Vocabulary_instance);
+setOptions = enen_Vocabulary_instance.setOptions.bind(enen_Vocabulary_instance);
+findTerm = enen_Vocabulary_instance.findTerm.bind(enen_Vocabulary_instance);
+
+api.enen_vocabulary_displayName = displayName;
+api.enen_vocabulary_setOptions = setOptions;
+api.enen_vocabulary_findTerm = findTerm;
+
+function T(node) {
+    if (!node) return '';
+    return node.innerText.trim();
 }
